@@ -9,6 +9,7 @@ import {
   isVersionSupported,
 } from '../metadata/metadataManager'
 import type { Config } from '../types/config'
+import type { SfdxProject } from '../types/sfdxProject'
 import type { Work } from '../types/work'
 
 import asyncFilter from './asyncFilter'
@@ -23,6 +24,7 @@ const SFDX_PROJECT_FILE_NAME = 'sfdx-project.json'
 export default class CLIHelper {
   protected readonly config: Config
   protected readonly gitAdapter: GitAdapter
+  protected packageDirectories: string[] = []
 
   constructor(protected readonly work: Work) {
     this.config = work.config
@@ -62,6 +64,8 @@ export default class CLIHelper {
     await this._handleDefault()
     const errors: string[] = []
 
+    await this._loadPackageDirectories()
+
     const directoriesPromise = this._filterDirectories()
     const filesPromise = this._filterFiles()
 
@@ -91,11 +95,25 @@ export default class CLIHelper {
     await this.gitAdapter.configureRepository()
   }
 
+  protected async _loadPackageDirectories() {
+    const sfdxProjectPath = join(this.config.repo, SFDX_PROJECT_FILE_NAME)
+    const exists = await fileExists(sfdxProjectPath)
+    if (exists) {
+      const sfdxProjectRaw = await readFile(sfdxProjectPath)
+      const sfdxProject: SfdxProject = JSON.parse(sfdxProjectRaw)
+      this.packageDirectories = sfdxProject.packageDirectories.map(pkgDir =>
+        join(this.config.repo, pkgDir.path)
+      )
+    } else {
+      throw new Error(
+        format(messages.errorPathIsNotFile, SFDX_PROJECT_FILE_NAME)
+      )
+    }
+  }
+
   protected _filterDirectories() {
     return asyncFilter(
-      [this.config.output, join(this.config.repo, this.config.source)].filter(
-        Boolean
-      ),
+      this.packageDirectories.filter(Boolean),
       async (dir: string) => {
         const exist = await dirExists(dir)
         return !exist
@@ -113,7 +131,10 @@ export default class CLIHelper {
       ].filter(Boolean),
       async (file: string) => {
         const exist = await fileExists(file)
-        return !exist
+        const inPackageDir = this.packageDirectories.some(pkgDir =>
+          file.startsWith(pkgDir)
+        )
+        return !exist && inPackageDir
       }
     )
   }
